@@ -1,13 +1,69 @@
 [
   {
     "name": "week",
-    "title": "This week",
-    "subtitle": "Property Management for Claude Code: what needs attention, rendered by npm run view",
+    "title": "The week",
+    "subtitle": "Property Management for Claude Code: who is behind, what is overdue, what is waiting on an owner. Rendered by npm run view.",
     "sections": [
       {
-        "title": "Needs attention",
-        "note": "TODO(author): point this at the industry's attention view (overdue, stuck, quiet).",
-        "sql": "select 'replace me' as item, 'TODO(author)' as why"
+        "title": "Needs a decision",
+        "note": "Arrears past the notice steps, habitability jobs, bonds not lodged, inspections booked without notice, compliance not met.",
+        "sql": "select case reason when 'arrears_tribunal' then 'Arrears, no Tribunal application' when 'arrears_remedy_notice' then 'Arrears, no 14 day notice' when 'arrears_overdue_notice' then 'Rent overdue, no notice served' when 'arrears_watch' then 'Behind, inside the notice window' when 'maintenance_habitability' then 'Habitability job open' when 'inspection_short_notice' then 'Inspection without entry notice' when 'bond_not_lodged' then 'Bond not lodged' when 'compliance_overdue' then 'Compliance not met' when 'smoke_alarm_check_overdue' then 'Smoke alarms not checked' when 'inspection_overdue' then 'Inspection past the cycle' when 'maintenance_owner_waiting' then 'Waiting on an owner' when 'maintenance_no_contractor' then 'Approved, nobody sent' when 'vacate_no_exit_inspection' then 'Vacate, no exit inspection' when 'fixed_term_ending' then 'Fixed term ending' when 'rent_review_due' then 'Rent review available' when 'inspection_report_unsent' then 'Inspection report not sent' when 'job_not_invoiced' then 'Job done, no invoice' when 'statement_not_sent' then 'Owner statement not sent' when 'task_overdue' then 'Task overdue' when 'owner_quiet' then 'Owner nobody has rung' else reason end as what, label as record, property, party as who, days, case when amount_cents > 0 then to_char(amount_cents / 100.0, 'FM$999,999,990') else '' end as value, manager, detail from v_attention_due order by case reason when 'arrears_tribunal' then 1 when 'arrears_remedy_notice' then 2 when 'arrears_overdue_notice' then 3 when 'arrears_watch' then 4 when 'maintenance_habitability' then 5 when 'inspection_short_notice' then 6 when 'bond_not_lodged' then 7 when 'compliance_overdue' then 8 when 'smoke_alarm_check_overdue' then 9 when 'inspection_overdue' then 10 when 'maintenance_owner_waiting' then 11 when 'maintenance_no_contractor' then 12 when 'vacate_no_exit_inspection' then 13 when 'fixed_term_ending' then 14 when 'rent_review_due' then 15 when 'inspection_report_unsent' then 16 when 'job_not_invoiced' then 17 when 'statement_not_sent' then 18 when 'task_overdue' then 19 else 20 end, days desc"
+      },
+      {
+        "title": "Arrears",
+        "note": "Rent is overdue once it is five working days late (RTA 1986 s 55AA). Fourteen days brings a notice to remedy (s 56), twenty one brings the Tribunal (s 55(1)(a)).",
+        "sql": "select tenancy_ref as tenancy, property, tenants, to_char(arrears_cents / 100.0, 'FM$999,999,990') as owing, days_behind as days, working_days_behind as working_days, to_char(rent_cents / 100.0, 'FM$999,990') || ' ' || rent_period as rent, coalesce(to_char(last_payment_on, 'YYYY-MM-DD'), 'never') as last_paid, coalesce(to_char(last_overdue_notice_on, 'YYYY-MM-DD'), 'NONE') as overdue_notice, coalesce(to_char(last_remedy_notice_on, 'YYYY-MM-DD'), 'NONE') as remedy_notice, coalesce(to_char(tribunal_applied_on, 'YYYY-MM-DD'), 'no') as tribunal, manager from v_arrears order by days_behind desc"
+      },
+      {
+        "title": "Inspections due",
+        "note": "Entry needs at least 48 hours written notice and no more than 14 days, once every four weeks at most, between 8am and 7pm (RTA 1986 s 48).",
+        "sql": "select property_ref as ref, property, suburb, tenants, coalesce(to_char(last_inspection_on, 'YYYY-MM-DD'), 'NEVER') as last_done, due_on as due, case when days_overdue > 0 then days_overdue || ' days overdue' else 'in ' || (-days_overdue) || ' days' end as position, coalesce(to_char(scheduled_on, 'YYYY-MM-DD'), '') as booked, case when scheduled_on is null then '' when notice_served_on is null then 'NO NOTICE' else notice_days || ' days notice' end as entry_notice, manager from v_inspections_due order by days_overdue desc"
+      },
+      {
+        "title": "Maintenance open",
+        "note": "Habitability first, then whatever has been sitting on an owner's desk longest.",
+        "sql": "select coalesce(job_ref, '') as ref, property, priority, category, summary as what, status, days_open || 'd' as open_for, case when days_waiting_on_owner is null then '' else days_waiting_on_owner || 'd' end as waiting_on_owner, contractor, case when quoted_cents > 0 then to_char(quoted_cents / 100.0, 'FM$999,999,990') else '' end as quoted, manager from v_maintenance_open order by case priority when 'urgent' then 1 when 'high' then 2 when 'normal' then 3 else 4 end, days_open desc"
+      },
+      {
+        "title": "The lease calendar",
+        "note": "Rent reviews the Act now allows, fixed terms running out, and vacates booked.",
+        "sql": "select kind, tenancy_ref as tenancy, property, tenants, owner, event_on as happens, case when days_away < 0 then (-days_away) || ' days ago' else 'in ' || days_away || ' days' end as timing, to_char(rent_cents / 100.0, 'FM$999,990') as rent, detail from v_lease_events order by days_away"
+      },
+      {
+        "title": "Compliance not met",
+        "note": "Every private rental has had to meet the healthy homes standards since 1 July 2025 (Residential Tenancies (Healthy Homes Standards) Regulations 2019).",
+        "sql": "select property_ref as ref, property, tenants, kind as item, status, coalesce(to_char(assessed_on, 'YYYY-MM-DD'), '') as assessed, coalesce(to_char(due_on, 'YYYY-MM-DD'), '') as due, case when days_overdue > 0 then days_overdue || ' days' else '' end as overdue, note from v_compliance_due where status <> 'compliant' order by days_overdue desc nulls last"
+      }
+    ]
+  },
+  {
+    "name": "portfolio",
+    "title": "The portfolio",
+    "subtitle": "The rent roll, the owners, the gap to market rent and where the fee income comes from. Rendered by npm run view.",
+    "sections": [
+      {
+        "title": "The rent roll",
+        "sql": "select property_ref as ref, property, suburb, owner, tenants, case when weekly_rent_cents > 0 then to_char(weekly_rent_cents / 100.0, 'FM$999,990') else 'VACANT' end as rent_pw, to_char(market_rent_cents / 100.0, 'FM$999,990') as market_pw, case when weekly_rent_cents > 0 and market_rent_cents > weekly_rent_cents then to_char((market_rent_cents - weekly_rent_cents) / 100.0, 'FM$999,990') else '' end as gap, to_char(weekly_fee_cents / 100.0, 'FM$999,990.00') as our_fee_pw, management_fee_pct || '%' as fee_rate, coalesce(to_char(tenancy_start_on, 'YYYY-MM-DD'), '') as let_since, case when arrears_cents > 0 then to_char(arrears_cents / 100.0, 'FM$999,999,990') else '' end as arrears, open_maintenance as jobs, compliance_gaps as gaps, manager from v_rent_roll order by property_ref"
+      },
+      {
+        "title": "Owners",
+        "sql": "select owner, owner_type as type, manager, properties, tenanted as let, to_char(weekly_rent_cents / 100.0, 'FM$999,999,990') as rent_pw, case when arrears_cents > 0 then to_char(arrears_cents / 100.0, 'FM$999,999,990') else '' end as arrears, open_maintenance as jobs, compliance_gaps as gaps, coalesce(to_char(last_statement_month, 'YYYY-MM'), 'NEVER') as last_statement, coalesce(days_since_contact || ' days ago', 'never') as last_spoke from v_owner_summary order by weekly_rent_cents desc"
+      },
+      {
+        "title": "Where the fee income comes from",
+        "sql": "select coalesce(suburb, 'unknown') as suburb, count(*) as properties, sum(case when weekly_rent_cents > 0 then 1 else 0 end) as let, to_char(sum(weekly_rent_cents) / 100.0, 'FM$999,999,990') as rent_pw, to_char(sum(weekly_fee_cents) / 100.0, 'FM$999,999,990.00') as fees_pw, to_char(sum(weekly_fee_cents) * 52 / 100.0, 'FM$999,999,990') as fees_a_year, round(avg(management_fee_pct), 2) || '%' as average_rate from v_rent_roll group by suburb order by sum(weekly_fee_cents) desc"
+      },
+      {
+        "title": "Maintenance spend in the last twelve months, by owner",
+        "sql": "select o.name as owner, count(distinct mr.id) as jobs, count(distinct p.id) as properties, to_char(coalesce(sum(j.invoiced_cents), 0) / 100.0, 'FM$999,999,990') as invoiced, to_char(coalesce(max(j.invoiced_cents), 0) / 100.0, 'FM$999,999,990') as biggest_single_job from owners o join properties p on p.owner_id = o.id join maintenance_requests mr on mr.property_id = p.id join contractor_jobs j on j.maintenance_id = mr.id where j.invoiced_on >= current_date - 365 group by o.name order by sum(j.invoiced_cents) desc"
+      },
+      {
+        "title": "Contractors, and what they have been paid",
+        "sql": "select c.name as contractor, c.trade, coalesce(c.contact_name, '') as contact, coalesce(c.phone, '') as phone, coalesce(c.licence_ref, '') as licence, case when c.insurance_expires_on is null then 'not on file' when c.insurance_expires_on < current_date then 'EXPIRED ' || to_char(c.insurance_expires_on, 'DD Mon YYYY') else to_char(c.insurance_expires_on, 'DD Mon YYYY') end as insurance, count(j.id) as jobs_12m, to_char(coalesce(sum(j.invoiced_cents), 0) / 100.0, 'FM$999,999,990') as invoiced_12m, round(avg(case when j.completed_on is not null and j.issued_on is not null then j.completed_on - j.issued_on end), 1) as average_days_to_finish from contractors c left join contractor_jobs j on j.contractor_id = c.id and j.issued_on >= current_date - 365 group by c.id, c.name, c.trade, c.contact_name, c.phone, c.licence_ref, c.insurance_expires_on order by sum(j.invoiced_cents) desc nulls last"
+      },
+      {
+        "title": "Owner statements, last three months",
+        "sql": "select to_char(s.period_month, 'YYYY-MM') as month, o.name as owner, to_char(s.rent_received_cents / 100.0, 'FM$999,999,990') as rent, to_char(s.management_fees_cents / 100.0, 'FM$999,999,990') as our_fee, to_char(s.expenses_cents / 100.0, 'FM$999,999,990') as expenses, to_char(s.disbursed_cents / 100.0, 'FM$999,999,990') as to_owner, s.status, coalesce(to_char(s.sent_on, 'YYYY-MM-DD'), 'NOT SENT') as sent from owner_statements s join owners o on o.id = s.owner_id where s.period_month >= date_trunc('month', current_date) - interval '3 month' order by s.period_month desc, o.name"
       }
     ]
   }

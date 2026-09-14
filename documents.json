@@ -1,11 +1,109 @@
 [
   {
-    "name": "example",
-    "title": "TODO(author): the first document this industry must produce",
-    "for_each": "select gen_random_uuid() as id, 'Example' as name",
+    "name": "owner-monthly-summary",
+    "title": "Owner monthly summary",
+    "for_each": "select o.id, o.name from owners o where o.status = 'active' and exists (select 1 from properties p where p.owner_id = o.id) order by o.name",
     "file": "name",
     "sections": [
-      { "title": "Details", "sql": "select 'replace me' as item, $1::text as record_id" }
+      {
+        "title": "Your properties this month",
+        "sql": "select o.name as owner, coalesce(o.postal_address, '') || case when o.city is null then '' else ', ' || o.city end as address, coalesce(m.full_name, 'unassigned') as your_property_manager, coalesce(m.email, '') as contact, to_char(current_date, 'DD Month YYYY') as prepared_on, o.payment_reference as your_reference from owners o left join managers m on m.id = o.manager_id where o.id = $1"
+      },
+      {
+        "title": "The month in figures",
+        "note": "These figures report what the trust account did. This system records them, it does not move money.",
+        "sql": "select to_char(s.period_month, 'Month YYYY') as month, to_char(s.rent_received_cents / 100.0, 'FM$999,999,990.00') as rent_received, to_char(s.management_fees_cents / 100.0, 'FM$999,999,990.00') as management_fee, to_char(s.expenses_cents / 100.0, 'FM$999,999,990.00') as repairs_and_expenses, to_char(s.disbursed_cents / 100.0, 'FM$999,999,990.00') as paid_to_you, s.status, coalesce(to_char(s.sent_on, 'DD Mon YYYY'), 'not sent yet') as sent from owner_statements s where s.owner_id = $1 order by s.period_month desc limit 3"
+      },
+      {
+        "title": "Each property",
+        "sql": "select r.property_ref as ref, r.property, r.suburb, r.tenants, case when r.weekly_rent_cents > 0 then to_char(r.weekly_rent_cents / 100.0, 'FM$999,990') else 'VACANT' end as rent_a_week, to_char(r.market_rent_cents / 100.0, 'FM$999,990') as market_rent, to_char(r.weekly_fee_cents / 100.0, 'FM$999,990.00') as our_fee_a_week, coalesce(to_char(r.tenancy_start_on, 'DD Mon YYYY'), '') as tenants_since, coalesce(to_char(r.last_inspection_on, 'DD Mon YYYY'), 'never') as last_inspection from v_rent_roll r where r.owner_id = $1 order by r.property_ref"
+      },
+      {
+        "title": "Rent position",
+        "note": "Anything owing, and the step the Residential Tenancies Act expects next.",
+        "sql": "select a.property, a.tenants, to_char(a.arrears_cents / 100.0, 'FM$999,999,990.00') as owing, a.days_behind as days_behind, coalesce(to_char(a.last_payment_on, 'DD Mon YYYY'), 'never') as last_payment, coalesce(to_char(a.last_overdue_notice_on, 'DD Mon YYYY'), 'none served') as overdue_notice, coalesce(to_char(a.last_remedy_notice_on, 'DD Mon YYYY'), 'none served') as notice_to_remedy from v_arrears a join properties p on p.id = a.property_id where p.owner_id = $1 order by a.days_behind desc"
+      },
+      {
+        "title": "Repairs and maintenance",
+        "sql": "select p.address_line as property, mr.reported_on as reported, mr.summary as what, mr.status, coalesce(ct.name, '') as contractor, case when j.quoted_cents > 0 then to_char(j.quoted_cents / 100.0, 'FM$999,999,990.00') else '' end as quoted, case when j.invoiced_cents > 0 then to_char(j.invoiced_cents / 100.0, 'FM$999,999,990.00') else '' end as invoiced, coalesce(to_char(mr.owner_approved_on, 'DD Mon'), case when mr.owner_asked_on is not null then 'WAITING ON YOU since ' || to_char(mr.owner_asked_on, 'DD Mon') else '' end) as your_approval from maintenance_requests mr join properties p on p.id = mr.property_id left join contractor_jobs j on j.maintenance_id = mr.id left join contractors ct on ct.id = j.contractor_id where p.owner_id = $1 and mr.reported_on >= current_date - 120 order by mr.reported_on desc"
+      },
+      {
+        "title": "Inspections",
+        "sql": "select p.address_line as property, i.kind, coalesce(to_char(i.completed_on, 'DD Mon YYYY'), 'booked for ' || to_char(i.scheduled_on, 'DD Mon YYYY')) as when_it_happened, coalesce(i.overall, '') as overall, coalesce(i.summary, '') as what_we_found, coalesce(to_char(i.next_due_on, 'DD Mon YYYY'), '') as next_due from inspections i join properties p on p.id = i.property_id where p.owner_id = $1 and coalesce(i.completed_on, i.scheduled_on) >= current_date - 180 order by coalesce(i.completed_on, i.scheduled_on) desc"
+      },
+      {
+        "title": "Compliance",
+        "note": "Every private rental has had to meet the healthy homes standards since 1 July 2025. Anything below that is not compliant is money you will have to spend.",
+        "sql": "select ci.kind as item, p.address_line as property, ci.status, coalesce(to_char(ci.assessed_on, 'DD Mon YYYY'), '') as last_assessed, coalesce(to_char(ci.due_on, 'DD Mon YYYY'), '') as due, coalesce(ci.note, '') as note, coalesce(ci.standard, '') as the_rule from compliance_items ci join properties p on p.id = ci.property_id where p.owner_id = $1 and ci.status <> 'compliant' order by p.ref, ci.kind"
+      },
+      {
+        "title": "What is coming up",
+        "sql": "select e.kind as event, e.property, e.tenants, e.event_on as happens, case when e.days_away < 0 then (-e.days_away) || ' days ago' else 'in ' || e.days_away || ' days' end as timing, e.detail from v_lease_events e join properties p on p.id = e.property_id where p.owner_id = $1 order by e.days_away"
+      }
+    ]
+  },
+  {
+    "name": "inspection-report",
+    "title": "Routine inspection report",
+    "for_each": "select i.id, (p.ref || ' ' || p.address_line || ' ' || to_char(i.completed_on, 'YYYY-MM-DD')) as name from inspections i join properties p on p.id = i.property_id where i.completed_on is not null and i.completed_on >= current_date - 120 order by i.completed_on desc",
+    "file": "name",
+    "sections": [
+      {
+        "title": "The inspection",
+        "sql": "select p.ref as property_reference, p.address_line as property, coalesce(p.suburb, '') || case when p.city is null then '' else ', ' || p.city end as suburb, o.name as owner, coalesce(tc.tenants, 'vacant') as tenants, i.kind as inspection_type, to_char(i.completed_on, 'DD Month YYYY') as inspected_on, coalesce(to_char(i.notice_served_on, 'DD Mon YYYY'), 'not recorded') as entry_notice_served, coalesce(m.full_name, 'unassigned') as inspected_by, coalesce(i.overall, '') as overall_condition, coalesce(to_char(i.next_due_on, 'DD Mon YYYY'), '') as next_inspection_due from inspections i join properties p on p.id = i.property_id join owners o on o.id = p.owner_id left join managers m on m.id = i.manager_id left join v_tenancy_current tc on tc.tenancy_id = i.tenancy_id where i.id = $1"
+      },
+      {
+        "title": "Summary",
+        "sql": "select coalesce(summary, 'No summary recorded.') as summary from inspections where id = $1"
+      },
+      {
+        "title": "Room by room",
+        "sql": "select area, condition, case when action_required then 'YES' else '' end as action_required, coalesce(note, '') as what_we_saw, coalesce(photo_ref, '') as photo from inspection_items where inspection_id = $1 order by case condition when 'action required' then 1 when 'poor' then 2 when 'fair' then 3 else 4 end, area"
+      },
+      {
+        "title": "Maintenance raised from this inspection",
+        "sql": "select mr.job_ref as reference, mr.summary as what, mr.priority, mr.status, coalesce(to_char(mr.owner_asked_on, 'DD Mon YYYY'), '') as sent_to_owner, coalesce(to_char(mr.owner_approved_on, 'DD Mon YYYY'), '') as approved from maintenance_requests mr join inspections i on i.property_id = mr.property_id where i.id = $1 and mr.reported_on >= i.completed_on - 3 and mr.reported_on <= i.completed_on + 14 order by mr.reported_on"
+      },
+      {
+        "title": "Compliance at this property",
+        "sql": "select ci.kind as item, ci.status, coalesce(to_char(ci.assessed_on, 'DD Mon YYYY'), '') as last_assessed, coalesce(ci.note, '') as note from compliance_items ci join inspections i on i.property_id = ci.property_id where i.id = $1 order by ci.kind"
+      },
+      {
+        "title": "The rules this inspection was run under",
+        "note": "Entry for a routine inspection needs at least 48 hours and no more than 14 days written notice, no more than once every four weeks, between 8am and 7pm (Residential Tenancies Act 1986 s 48(2) and (3)).",
+        "sql": "select case when i.notice_served_on is null then 'NO ENTRY NOTICE RECORDED' else to_char(i.notice_served_on, 'DD Mon YYYY') end as entry_notice_served, case when i.notice_served_on is null then '' else (i.scheduled_on - i.notice_served_on) || ' days before the visit' end as notice_period, case when i.notice_served_on is not null and (i.scheduled_on - i.notice_served_on) >= 2 then 'Compliant' when i.notice_served_on is null then 'Not recorded' else 'SHORT OF 48 HOURS' end as position from inspections i where i.id = $1"
+      }
+    ]
+  },
+  {
+    "name": "arrears-notice-draft",
+    "title": "Rent arrears letter (draft)",
+    "for_each": "select a.tenancy_id as id, (a.tenancy_ref || ' ' || a.property) as name from v_arrears a order by a.days_behind desc",
+    "file": "name",
+    "sections": [
+      {
+        "title": "This is a draft. Nobody has been sent anything.",
+        "note": "Read it, change it, and serve it the way the tenancy agreement allows. Keep proof of service: the Tenancy Tribunal will ask for it.",
+        "sql": "select t.tenancy_ref as tenancy, p.address_line as property, coalesce(tc.tenants, '') as addressed_to, to_char(current_date, 'DD Month YYYY') as dated, coalesce(m.full_name, '') as from_whom, coalesce(m.email, '') as reply_to from tenancies t join properties p on p.id = t.property_id left join v_tenancy_current tc on tc.tenancy_id = t.id left join managers m on m.id = t.manager_id where t.id = $1"
+      },
+      {
+        "title": "What is owed",
+        "sql": "select to_char(a.arrears_cents / 100.0, 'FM$999,999,990.00') as amount_owing, a.days_behind || ' days' as how_far_behind, a.working_days_behind || ' working days' as in_working_days, to_char(a.rent_cents / 100.0, 'FM$999,990.00') || ' ' || a.rent_period as the_rent, coalesce(to_char(a.last_payment_on, 'DD Mon YYYY'), 'no payment recorded') as last_payment_received from v_arrears a where a.tenancy_id = $1"
+      },
+      {
+        "title": "What has already been served",
+        "sql": "select ae.noted_on as date, ae.action as step, to_char(ae.amount_cents / 100.0, 'FM$999,999,990.00') as amount_at_the_time, coalesce(ae.note, '') as note from arrears_events ae where ae.tenancy_id = $1 order by ae.noted_on"
+      },
+      {
+        "title": "The rent ledger, last twelve entries",
+        "note": "This is the record of what was charged and what came in. The money itself sits in the trust account.",
+        "sql": "select entry_on as date, kind, to_char(amount_cents / 100.0, 'FM$999,999,990.00') as amount, coalesce(method, '') as method, coalesce(note, '') as note from rent_ledger where tenancy_id = $1 order by entry_on desc limit 12"
+      },
+      {
+        "title": "The step the Act expects next",
+        "note": "Residential Tenancies Act 1986: rent is overdue once it is five working days late and a notice of overdue rent can be served (s 55AA). Three of those inside ninety days, or twenty one days of arrears, and the landlord may apply to the Tenancy Tribunal to end the tenancy (s 55(1)(a) and (aa)). A 14 day notice to remedy (s 56) gives the tenant a fortnight to put it right.",
+        "sql": "select case when a.days_behind >= 21 and a.tribunal_applied_on is null then 'Apply to the Tenancy Tribunal (s 55(1)(a))' when a.days_behind >= 14 and a.last_remedy_notice_on is null then 'Serve the 14 day notice to remedy (s 56)' when a.working_days_behind >= 5 and a.last_overdue_notice_on is null then 'Serve the notice of overdue rent (s 55AA)' else 'Ring them, then diary it for three days' end as next_step, coalesce(to_char(a.last_overdue_notice_on, 'DD Mon YYYY'), 'none served') as last_overdue_notice, coalesce(to_char(a.last_remedy_notice_on, 'DD Mon YYYY'), 'none served') as last_notice_to_remedy, a.overdue_notices_90d as overdue_notices_in_90_days, coalesce(to_char(a.payment_plan_on, 'DD Mon YYYY'), 'none') as payment_plan from v_arrears a where a.tenancy_id = $1"
+      }
     ]
   }
 ]
